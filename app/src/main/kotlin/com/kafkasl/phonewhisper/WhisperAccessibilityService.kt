@@ -456,7 +456,8 @@ class WhisperAccessibilityService : AccessibilityService() {
                     if (result.text != null && result.text.isNotBlank()) {
                         injectText(result.text)
                     } else {
-                        injectText(text, feedback = "Cleanup failed — raw copied to clipboard", feedbackDurationMs = 3000)
+                        Log.w(TAG, "Polish failed or rejected: ${result.error ?: "unknown"}")
+                        injectText(text, feedback = "Polish rejected — raw inserted", feedbackDurationMs = 3000)
                     }
                     state = State.IDLE
                     setBusy(false)

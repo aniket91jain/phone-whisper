@@ -163,8 +163,48 @@ OUTPUT: cleaned text only. No preamble. Empty string if nothing remains."""
                     callback(Result(null, "HTTP ${response.code}"))
                     return
                 }
-                callback(parseResponse(responseBody))
+                val parsed = parseResponse(responseBody)
+                if (parsed.text == null) {
+                    callback(parsed)
+                    return
+                }
+                callback(applySafetyChecks(rawText = text, polishedText = parsed.text))
             }
         })
     }
+
+    /**
+     * Three guardrails on the polished output, ported from WhisperWriter's
+     * transcription.py. If any trip, returns Result(null, reason) so the caller
+     * falls back to the raw transcript instead of pasting potentially-bad text.
+     *
+     * 1. Empty response when raw was non-empty (API returned nothing useful).
+     * 2. Polished output is more than 3× the length of raw (runaway generation).
+     * 3. Word-overlap between raw and polished is below 30% (likely hallucination).
+     */
+    internal fun applySafetyChecks(rawText: String, polishedText: String): Result {
+        if (rawText.isNotBlank() && polishedText.isBlank()) {
+            return Result(null, "polish rejected: empty response")
+        }
+        if (polishedText.length > rawText.length * 3) {
+            return Result(null, "polish rejected: runaway length (${polishedText.length} vs ${rawText.length})")
+        }
+        val overlap = wordOverlap(rawText, polishedText)
+        if (overlap < 0.30) {
+            val pct = (overlap * 100).toInt()
+            return Result(null, "polish rejected: low word overlap ($pct%)")
+        }
+        return Result(polishedText, null)
+    }
+
+    private fun wordOverlap(raw: String, polished: String): Double {
+        val rawWords = extractWords(raw)
+        if (rawWords.isEmpty()) return 1.0
+        val polishedWords = extractWords(polished)
+        val intersection = rawWords.intersect(polishedWords).size
+        return intersection.toDouble() / rawWords.size
+    }
+
+    private fun extractWords(text: String): Set<String> =
+        Regex("\\b\\w+\\b").findAll(text.lowercase()).map { it.value }.toSet()
 }
