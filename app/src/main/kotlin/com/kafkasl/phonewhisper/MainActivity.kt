@@ -30,6 +30,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var keyRowSub: TextView
     private lateinit var promptRowSub: TextView
     private lateinit var promptRow: LinearLayout
+    private lateinit var hintRow: LinearLayout
+    private lateinit var hintRowSub: TextView
     private lateinit var modelContainer: LinearLayout
     private lateinit var promptContainer: LinearLayout
 
@@ -91,7 +93,7 @@ class MainActivity : AppCompatActivity() {
             isChecked = isCloud
             isClickable = false
         }
-        val cloudRow = settingsRow("Use cloud transcription", "Requires OpenAI API key", cloudSwitch) {
+        val cloudRow = settingsRow("Use cloud transcription", "Requires Groq API key", cloudSwitch) {
             val newCloud = !cloudSwitch.isChecked
             prefs().edit().putBoolean("use_local", !newCloud).apply()
             cloudSwitch.isChecked = newCloud
@@ -105,6 +107,14 @@ class MainActivity : AppCompatActivity() {
         for (m in MODEL_CATALOG) modelContainer.addView(buildModelRow(m))
         root.addView(modelContainer)
 
+        // --- Transcription Hints Section ---
+        root.addView(sectionHeader("Transcription Hints"))
+        hintRow = settingsRow("Proper nouns", currentHintSummary()) { promptHintEditor() }
+        hintRowSub = hintRow.findViewWithTag("subtitle")
+        hintRowSub.maxLines = 2
+        hintRowSub.ellipsize = android.text.TextUtils.TruncateAt.END
+        root.addView(hintRow)
+
         // --- Post-Processing Section ---
         root.addView(sectionHeader("Post-Processing"))
         
@@ -113,7 +123,7 @@ class MainActivity : AppCompatActivity() {
             isChecked = isPostProcessing
             isClickable = false
         }
-        val postProcessRow = settingsRow("Cleanup transcript", "Uses OpenAI Chat API to fix grammar and punctuation", postProcessSwitch) {
+        val postProcessRow = settingsRow("Cleanup transcript", "Uses Groq Llama to fix grammar and punctuation", postProcessSwitch) {
             val newVal = !postProcessSwitch.isChecked
             prefs().edit().putBoolean("use_post_processing", newVal).apply()
             postProcessSwitch.isChecked = newVal
@@ -134,7 +144,7 @@ class MainActivity : AppCompatActivity() {
         // --- Settings Section ---
         root.addView(sectionHeader("Settings"))
         
-        val keyRow = settingsRow("OpenAI API Key", "Tap to set") { promptApiKey() }
+        val keyRow = settingsRow("Groq API Key", "Tap to set") { promptApiKey() }
         keyRowSub = keyRow.findViewWithTag("subtitle")
         root.addView(keyRow)
 
@@ -292,7 +302,9 @@ class MainActivity : AppCompatActivity() {
         val views = promptRows[preset.key] ?: return
         val current = currentPrompt()
         val active = when (preset.key) {
-            "custom" -> current != PostProcessor.DEV_PROMPT && current != PostProcessor.SIMPLE_PROMPT
+            "custom" -> current != PostProcessor.DEV_PROMPT &&
+                current != PostProcessor.SIMPLE_PROMPT &&
+                current != PostProcessor.WHISPERWRITER_PROMPT
             else -> current == preset.prompt
         }
         views.radio.isChecked = active
@@ -319,12 +331,14 @@ class MainActivity : AppCompatActivity() {
         promptRow.visibility = if (usePostProcessing) View.VISIBLE else View.GONE
 
         val apiKey = prefs().getString("api_key", "") ?: ""
-        keyRowSub.text = if (apiKey.isBlank()) "Tap to set" 
-                         else if (apiKey.length > 7) "sk-...${apiKey.takeLast(4)}" 
-                         else "sk-...***"
+        keyRowSub.text = if (apiKey.isBlank()) "Tap to set"
+                         else if (apiKey.length > 7) "gsk_...${apiKey.takeLast(4)}"
+                         else "gsk_...***"
 
         val prompt = currentPrompt()
         promptRowSub.text = prompt
+
+        hintRowSub.text = currentHintSummary()
 
         val cur = prefs().getString("model_name", "") ?: ""
         if (cur.isBlank() || !File(filesDir, "models/$cur").exists()) {
@@ -347,14 +361,47 @@ class MainActivity : AppCompatActivity() {
 
     private fun promptApiKey() {
         val input = EditText(this).apply {
-            hint = "sk-..."
+            hint = "gsk_..."
             setText(prefs().getString("api_key", ""))
         }
         android.app.AlertDialog.Builder(this)
-            .setTitle("OpenAI API Key")
+            .setTitle("Groq API Key")
             .setView(input.apply { setPadding(dp(24), dp(8), dp(24), dp(8)) })
             .setPositiveButton("Save") { _, _ ->
                 prefs().edit().putString("api_key", input.text.toString().trim()).apply()
+                refresh()
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private fun currentHint(): String =
+        prefs().getString("whisper_prompt_hint", TranscriberClient.DEFAULT_PROMPT_HINT)
+            ?: TranscriberClient.DEFAULT_PROMPT_HINT
+
+    private fun currentHintSummary(): String {
+        val hint = currentHint()
+        return if (hint.isBlank()) "(none — tap to set)" else hint
+    }
+
+    private fun promptHintEditor() {
+        val input = EditText(this).apply {
+            hint = "Comma-separated list of proper nouns"
+            inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE
+            minLines = 3
+            gravity = Gravity.TOP or Gravity.START
+            setText(currentHint())
+        }
+        android.app.AlertDialog.Builder(this)
+            .setTitle("Transcription hints")
+            .setMessage("These names are sent to Whisper as a hint to improve spelling. Edit, leave blank to disable, or reset to default.")
+            .setView(input.apply { setPadding(dp(24), dp(8), dp(24), dp(8)) })
+            .setPositiveButton("Save") { _, _ ->
+                prefs().edit().putString("whisper_prompt_hint", input.text.toString().trim()).apply()
+                refresh()
+            }
+            .setNeutralButton("Reset to default") { _, _ ->
+                prefs().edit().remove("whisper_prompt_hint").apply()
                 refresh()
             }
             .setNegativeButton("Cancel", null)
@@ -451,6 +498,12 @@ class MainActivity : AppCompatActivity() {
     private data class PromptPreset(val key: String, val title: String, val subtitle: String, val prompt: String)
 
     private fun promptPresets() = listOf(
+        PromptPreset(
+            key = "whisperwriter",
+            title = "WhisperWriter polish",
+            subtitle = "Mechanical cleaner — refuses to answer transcribed questions",
+            prompt = PostProcessor.WHISPERWRITER_PROMPT
+        ),
         PromptPreset(
             key = "dev",
             title = "Dev cleanup",

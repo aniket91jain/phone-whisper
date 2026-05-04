@@ -11,6 +11,15 @@ object TranscriberClient {
 
     private val client = OkHttpClient()
 
+    /**
+     * Default proper-noun hint passed to Whisper as the `prompt` parameter to bias
+     * transcription toward correct spelling of names. Carried over from
+     * whisper-writer/src/config.yaml line 6. Editable from the Settings screen.
+     */
+    const val DEFAULT_PROMPT_HINT =
+        "Jasmine Journeys, JJ, Amado, Assagao, OwnerRez, PriceLabs, Plaud, Soniox, " +
+        "Adhiraj, Kanika, Preksha Shah, Vinu Daniel, Joppan, Wallmakers"
+
     fun parseResponse(json: String): Result = try {
         val obj = JSONObject(json)
         when {
@@ -22,17 +31,25 @@ object TranscriberClient {
         Result(null, e.message ?: "Parse error")
     }
 
-    fun transcribe(wavData: ByteArray, apiKey: String, callback: (Result) -> Unit) {
-        val body = MultipartBody.Builder()
+    fun transcribe(
+        wavData: ByteArray,
+        apiKey: String,
+        promptHint: String,
+        callback: (Result) -> Unit
+    ) {
+        val bodyBuilder = MultipartBody.Builder()
             .setType(MultipartBody.FORM)
-            .addFormDataPart("model", "whisper-1")
+            .addFormDataPart("model", "whisper-large-v3-turbo")
             .addFormDataPart("file", "audio.wav", wavData.toRequestBody("audio/wav".toMediaType()))
-            .build()
+
+        if (promptHint.isNotBlank()) {
+            bodyBuilder.addFormDataPart("prompt", promptHint)
+        }
 
         val request = Request.Builder()
-            .url("https://api.openai.com/v1/audio/transcriptions")
+            .url("https://api.groq.com/openai/v1/audio/transcriptions")
             .header("Authorization", "Bearer $apiKey")
-            .post(body)
+            .post(bodyBuilder.build())
             .build()
 
         client.newCall(request).enqueue(object : Callback {
