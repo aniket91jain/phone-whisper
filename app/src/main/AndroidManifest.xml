@@ -34,5 +34,13 @@
                 android:resource="@xml/accessibility_service_config" />
         </service>
 
+        <receiver
+            android:name=".ToggleReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.kafkasl.phonewhisper.action.TOGGLE_VOICE" />
+            </intent-filter>
+        </receiver>
+
     </application>
 </manifest>

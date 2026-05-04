@@ -310,6 +310,11 @@ class WhisperAccessibilityService : AccessibilityService() {
         }
     }
 
+    /** Called from ToggleReceiver when an external app (e.g. Tasker) sends the toggle broadcast. */
+    fun handleExternalToggle() {
+        handler.post { onTap() }
+    }
+
     private fun startRecording() {
         if (checkSelfPermission(android.Manifest.permission.RECORD_AUDIO)
             != android.content.pm.PackageManager.PERMISSION_GRANTED) {
