@@ -53,6 +53,10 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
+        // Schedule the daily audio-prune task (idempotent — KEEP policy preserves an
+        // existing schedule, so this is safe to call on every launch).
+        com.kafkasl.phonewhisper.history.AudioPruneWorker.schedule(this)
+
         val root = vertical(0, 0)
 
         // Top large header (like "Connected devices")
@@ -143,7 +147,7 @@ class MainActivity : AppCompatActivity() {
 
         // --- Settings Section ---
         root.addView(sectionHeader("Settings"))
-        
+
         val keyRow = settingsRow("Groq API Key", "Tap to set") { promptApiKey() }
         keyRowSub = keyRow.findViewWithTag("subtitle")
         root.addView(keyRow)

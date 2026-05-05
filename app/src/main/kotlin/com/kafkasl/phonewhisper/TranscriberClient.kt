@@ -41,6 +41,10 @@ object TranscriberClient {
             .setType(MultipartBody.FORM)
             .addFormDataPart("model", "whisper-large-v3-turbo")
             .addFormDataPart("file", "audio.wav", wavData.toRequestBody("audio/wav".toMediaType()))
+            // Match WhisperWriter's STT settings: force English so non-Latin proper nouns
+            // (Indian English names etc.) aren't mis-routed through other languages.
+            .addFormDataPart("language", "en")
+            .addFormDataPart("temperature", "0")
 
         if (promptHint.isNotBlank()) {
             bodyBuilder.addFormDataPart("prompt", promptHint)
