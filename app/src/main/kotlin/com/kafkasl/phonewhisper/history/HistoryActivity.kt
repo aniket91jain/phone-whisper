@@ -554,6 +554,7 @@ class HistoryActivity : AppCompatActivity() {
         PostProcessor.process(rawText, prompt, apiKey) { polishResult ->
             val polished = polishResult.text?.takeIf { it.isNotBlank() }
             val status = if (polished != null) HistoryStatus.SUCCESS else HistoryStatus.POLISH_FAILED
+            if (polished != null) addNewProperNouns(polishResult.newProperNouns)
             thread {
                 repo.update(entry.copy(
                     rawTranscript = rawText,
@@ -590,6 +591,7 @@ class HistoryActivity : AppCompatActivity() {
         PostProcessor.process(rawText, prompt, apiKey) { result ->
             val polished = result.text?.takeIf { it.isNotBlank() }
             val status = if (polished != null) HistoryStatus.SUCCESS else HistoryStatus.POLISH_FAILED
+            if (polished != null) addNewProperNouns(result.newProperNouns)
             thread {
                 repo.update(entry.copy(
                     polishedTranscript = polished,
@@ -604,6 +606,25 @@ class HistoryActivity : AppCompatActivity() {
                 }
             }
         }
+    }
+
+    /**
+     * Append spelled-out proper nouns from a polish response to the Whisper hint
+     * list (deduped). Mirrors WhisperAccessibilityService.addNewProperNouns; lives
+     * here too because re-polish runs from the History screen.
+     */
+    private fun addNewProperNouns(nouns: List<String>) {
+        if (nouns.isEmpty()) return
+        val current = prefs().getString("whisper_prompt_hint", TranscriberClient.DEFAULT_PROMPT_HINT)
+            ?: TranscriberClient.DEFAULT_PROMPT_HINT
+        val existing = current.split(",").map { it.trim() }.filter { it.isNotEmpty() }.toMutableSet()
+        val toAdd = nouns.filter { it.isNotBlank() && it !in existing }
+        if (toAdd.isEmpty()) return
+        existing += toAdd
+        prefs().edit().putString("whisper_prompt_hint", existing.joinToString(", ")).apply()
+        val msg = if (toAdd.size == 1) "Added \"${toAdd[0]}\" to proper nouns"
+                  else "Added ${toAdd.size} proper nouns"
+        Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
     }
 
     // --- Helpers ---

@@ -8,7 +8,19 @@ import org.json.JSONObject
 import java.io.IOException
 
 object PostProcessor {
-    data class Result(val text: String?, val error: String?)
+    /**
+     * Result of a polish call.
+     *  - text: the cleaned/polished text (null on failure).
+     *  - error: failure message (null on success).
+     *  - newProperNouns: when the user explicitly spelled out a proper noun
+     *    (e.g. "Aniket A-N-I-K-E-T"), Llama returns it here so the caller can
+     *    add it to the Whisper hint list. Empty list otherwise.
+     */
+    data class Result(
+        val text: String?,
+        val error: String?,
+        val newProperNouns: List<String> = emptyList()
+    )
 
     private val client = OkHttpClient()
 
@@ -95,6 +107,22 @@ PROPER NOUNS (correct STT errors for these names only, no others):
 FORBIDDEN: no other word changes, no rephrasing, no adding content, no reordering.
 OUTPUT: cleaned text only. No preamble. Empty string if nothing remains."""
 
+    /**
+     * Same as WHISPERWRITER_PROMPT but instructs Llama to return JSON so we can
+     * detect spelled-out proper nouns and add them to the Whisper hint list.
+     * Used at runtime when polish runs with the WhisperWriter preset.
+     */
+    private val WHISPERWRITER_JSON_PROMPT: String =
+        WHISPERWRITER_PROMPT.removeSuffix(
+            "OUTPUT: cleaned text only. No preamble. Empty string if nothing remains."
+        ).trimEnd() + "\n\nOUTPUT: a single JSON object only, no markdown, no preamble. Schema: " +
+        """{"cleaned": "<the cleaned text per the rules above; empty string if nothing remains>", """ +
+        """"new_nouns": ["<list of proper nouns the user explicitly SPELLED OUT in this transcript""" +
+        """ via the SPELLING rule (spoken attempt + individual letters), and that should be """ +
+        """added to the user's dictionary so they don't have to spell them again next time>"]}. """ +
+        "Include a name in new_nouns ONLY if the user explicitly spelled it out letter by letter. " +
+        "If the user did not spell anything out, new_nouns must be []. Return only the JSON object."
+
     const val DEFAULT_PROMPT = WHISPERWRITER_PROMPT
 
     fun parseResponse(json: String): Result {
@@ -123,16 +151,20 @@ OUTPUT: cleaned text only. No preamble. Empty string if nothing remains."""
         // explicitly delimited so Llama knows where the user content begins and ends.
         // (== compares string content; === would fail because prefs returns a different
         // String instance than the constant.)
-        val userContent = if (prompt == WHISPERWRITER_PROMPT) {
+        val isWhisperWriter = prompt == WHISPERWRITER_PROMPT
+        val userContent = if (isWhisperWriter) {
             "[TRANSCRIPT]\n$text\n[/TRANSCRIPT]"
         } else {
             text
         }
+        // For the WhisperWriter preset, swap in the JSON-output variant so we can
+        // capture spelled-out proper nouns and feed them back into the hint list.
+        val systemContent = if (isWhisperWriter) WHISPERWRITER_JSON_PROMPT else prompt
 
         val messages = JSONArray().apply {
             put(JSONObject().apply {
                 put("role", "system")
-                put("content", prompt)
+                put("content", systemContent)
             })
             put(JSONObject().apply {
                 put("role", "user")
@@ -144,6 +176,9 @@ OUTPUT: cleaned text only. No preamble. Empty string if nothing remains."""
             put("model", "llama-3.3-70b-versatile")
             put("messages", messages)
             put("temperature", 0.2)
+            if (isWhisperWriter) {
+                put("response_format", JSONObject().apply { put("type", "json_object") })
+            }
         }
 
         val body = bodyJson.toString().toRequestBody("application/json".toMediaType())
@@ -170,9 +205,39 @@ OUTPUT: cleaned text only. No preamble. Empty string if nothing remains."""
                     callback(parsed)
                     return
                 }
-                callback(applySafetyChecks(rawText = text, polishedText = parsed.text))
+                // For the WhisperWriter preset the response body is itself a JSON
+                // object: {"cleaned": "...", "new_nouns": [...]}. Extract the cleaned
+                // text and any newly-spelled proper nouns. Fall back to plain text on
+                // parse failure so a misbehaving response doesn't break polish entirely.
+                val (cleaned, newNouns) = if (isWhisperWriter) {
+                    extractJsonPolish(parsed.text)
+                } else {
+                    parsed.text to emptyList<String>()
+                }
+                val safetyResult = applySafetyChecks(rawText = text, polishedText = cleaned)
+                callback(safetyResult.copy(newProperNouns = newNouns))
             }
         })
+    }
+
+    /**
+     * Pull "cleaned" + "new_nouns" out of Llama's JSON response. If the response
+     * isn't valid JSON or doesn't follow the schema, treats the whole thing as the
+     * cleaned text and returns no proper nouns.
+     */
+    private fun extractJsonPolish(responseContent: String): Pair<String, List<String>> {
+        return try {
+            val obj = JSONObject(responseContent.trim())
+            val cleaned = obj.optString("cleaned", responseContent)
+            val nounsArr = obj.optJSONArray("new_nouns")
+            val nouns = if (nounsArr != null) {
+                (0 until nounsArr.length())
+                    .mapNotNull { nounsArr.optString(it).takeIf { s -> s.isNotBlank() } }
+            } else emptyList()
+            cleaned to nouns
+        } catch (e: Exception) {
+            responseContent to emptyList()
+        }
     }
 
     /**

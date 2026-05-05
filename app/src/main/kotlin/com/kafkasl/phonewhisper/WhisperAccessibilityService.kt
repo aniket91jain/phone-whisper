@@ -49,6 +49,9 @@ class WhisperAccessibilityService : AccessibilityService() {
         private const val PAD_DP = 10
         private const val MARGIN_DP = 8
         private const val TAP_THRESHOLD_DP = 10
+        // Tighter than TAP_THRESHOLD_DP because we want any deliberate movement to
+        // disqualify a long-press, even if it's not yet enough to count as a drag.
+        private const val LONG_PRESS_CANCEL_DP = 4
         private const val RING_DP = 56
         // Window is wider than the ring so the button has room to grow on press
         // (visually up to PRESSED_SCALE × button size) without being clipped.
@@ -229,8 +232,10 @@ class WhisperAccessibilityService : AccessibilityService() {
                 }
                 MotionEvent.ACTION_MOVE -> {
                     val moved = abs(ev.rawX - touchX) + abs(ev.rawY - touchY)
-                    if (moved >= TAP_THRESHOLD_DP * dp) {
-                        // Movement disqualifies a long-press (treat it as a drag)
+                    if (moved >= LONG_PRESS_CANCEL_DP * dp) {
+                        // Even a small movement disqualifies a long-press — the user is
+                        // starting to drag. (TAP_THRESHOLD_DP is still used below for the
+                        // tap-vs-drag classification on release.)
                         handler.removeCallbacks(longPressRunnable)
                     }
                     params.x = startX + (ev.rawX - touchX).toInt()
@@ -749,6 +754,7 @@ class WhisperAccessibilityService : AccessibilityService() {
             PostProcessor.process(text, prompt, apiKey) { result ->
                 handler.post {
                     if (result.text != null && result.text.isNotBlank()) {
+                        addNewProperNouns(result.newProperNouns)
                         finishAndSave(timestamp, audioPath, rawText = text, polishedText = result.text,
                             polishEnabled = true, polishError = null, textToInject = result.text)
                     } else {
@@ -812,6 +818,29 @@ class WhisperAccessibilityService : AccessibilityService() {
         state = State.IDLE
         setBusy(false)
         setAppearance(COLOR_IDLE)
+    }
+
+    /**
+     * Append spelled-out proper nouns detected by the polish step to the user's
+     * Whisper hint list. Deduped against the existing list. Shows a feedback toast
+     * naming what got added so the user knows it happened (and can remove from
+     * Settings if Llama got it wrong).
+     */
+    private fun addNewProperNouns(nouns: List<String>) {
+        if (nouns.isEmpty()) return
+        val current = prefs().getString("whisper_prompt_hint", TranscriberClient.DEFAULT_PROMPT_HINT)
+            ?: TranscriberClient.DEFAULT_PROMPT_HINT
+        val existing = current.split(",").map { it.trim() }.filter { it.isNotEmpty() }.toMutableSet()
+        val toAdd = nouns.filter { it.isNotBlank() && it !in existing }
+        if (toAdd.isEmpty()) return
+        existing += toAdd
+        val updated = existing.joinToString(", ")
+        prefs().edit().putString("whisper_prompt_hint", updated).apply()
+        showFeedback(
+            text = if (toAdd.size == 1) "Added \"${toAdd[0]}\" to proper nouns"
+                   else "Added ${toAdd.size} proper nouns",
+            durationMs = 3000
+        )
     }
 
     /** Persist a STT_FAILED entry. Audio path may be null for local-mode failures. */

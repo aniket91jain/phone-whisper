@@ -32,6 +32,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var promptRow: LinearLayout
     private lateinit var hintRow: LinearLayout
     private lateinit var hintRowSub: TextView
+    private lateinit var accessibilityBanner: LinearLayout
     private lateinit var modelContainer: LinearLayout
     private lateinit var promptContainer: LinearLayout
 
@@ -66,6 +67,9 @@ class MainActivity : AppCompatActivity() {
             setPadding(dp(24), dp(64), dp(24), dp(24))
         }
         root.addView(header)
+
+        accessibilityBanner = buildAccessibilityBanner()
+        root.addView(accessibilityBanner)
 
         // Status row
         val statusRow = settingsRow("Status", "Checking...")
@@ -329,6 +333,7 @@ class MainActivity : AppCompatActivity() {
 
         audioRowSub.text = if (audio) "Granted" else "Tap to grant permission"
         accRowSub.text = if (acc) "Enabled" else "Tap to enable in settings"
+        accessibilityBanner.visibility = if (acc) View.GONE else View.VISIBLE
 
         modelContainer.visibility = if (useLocal) View.VISIBLE else View.GONE
         promptContainer.visibility = if (usePostProcessing) View.VISIBLE else View.GONE
@@ -475,6 +480,61 @@ class MainActivity : AppCompatActivity() {
         if (widget != null) row.addView(widget)
 
         return row
+    }
+
+    /**
+     * High-visibility banner shown at the top when the accessibility service is
+     * disabled (e.g. after a fresh install or APK upgrade). Tapping it opens the
+     * system Accessibility settings where the user can flip the service back on.
+     */
+    private fun buildAccessibilityBanner(): LinearLayout {
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(20), dp(14), dp(20), dp(14))
+            background = android.graphics.drawable.GradientDrawable().apply {
+                cornerRadius = dp(12).toFloat()
+                setColor(0xFFFEE2E2.toInt())  // soft red background, light theme; visible on dark too
+            }
+            val outerLp = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply {
+                setMargins(dp(16), dp(8), dp(16), dp(8))
+            }
+            layoutParams = outerLp
+            visibility = View.GONE  // refresh() will show it when needed
+
+            val textCol = vertical(0).apply {
+                layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+            }
+            textCol.addView(TextView(this@MainActivity).apply {
+                text = "Accessibility service is off"
+                textSize = 16f
+                setTypeface(typeface, Typeface.BOLD)
+                setTextColor(0xFF991B1B.toInt())
+            })
+            textCol.addView(TextView(this@MainActivity).apply {
+                text = "The floating mic won't appear until you enable it. This often happens after the app updates."
+                textSize = 13f
+                setTextColor(0xFF7F1D1D.toInt())
+                setPadding(0, dp(2), 0, 0)
+            })
+            addView(textCol)
+
+            addView(MaterialButton(this@MainActivity).apply {
+                text = "Fix"
+                isAllCaps = false
+                setOnClickListener {
+                    startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+                }
+            })
+
+            isClickable = true
+            setOnClickListener {
+                startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+            }
+        }
     }
 
     private fun sectionHeader(title: String) = TextView(this).apply {
