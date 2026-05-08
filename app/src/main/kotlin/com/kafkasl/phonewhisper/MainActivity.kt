@@ -30,6 +30,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var keyRowSub: TextView
     private lateinit var promptRowSub: TextView
     private lateinit var promptRow: LinearLayout
+    private lateinit var modelPickerRow: LinearLayout
+    private lateinit var modelPickerRowSub: TextView
     private lateinit var hintRow: LinearLayout
     private lateinit var hintRowSub: TextView
     private lateinit var accessibilityBanner: LinearLayout
@@ -148,6 +150,10 @@ class MainActivity : AppCompatActivity() {
         promptRowSub.maxLines = 2
         promptRowSub.ellipsize = android.text.TextUtils.TruncateAt.END
         root.addView(promptRow)
+
+        modelPickerRow = settingsRow("Polish model (Groq)", currentPolishModel()) { promptPolishModel() }
+        modelPickerRowSub = modelPickerRow.findViewWithTag("subtitle")
+        root.addView(modelPickerRow)
 
         // --- Settings Section ---
         root.addView(sectionHeader("Settings"))
@@ -338,6 +344,8 @@ class MainActivity : AppCompatActivity() {
         modelContainer.visibility = if (useLocal) View.VISIBLE else View.GONE
         promptContainer.visibility = if (usePostProcessing) View.VISIBLE else View.GONE
         promptRow.visibility = if (usePostProcessing) View.VISIBLE else View.GONE
+        modelPickerRow.visibility = if (usePostProcessing) View.VISIBLE else View.GONE
+        modelPickerRowSub.text = currentPolishModel()
 
         val apiKey = prefs().getString("api_key", "") ?: ""
         keyRowSub.text = if (apiKey.isBlank()) "Tap to set"
@@ -552,6 +560,28 @@ class MainActivity : AppCompatActivity() {
 
     private fun currentPrompt() = prefs().getString("post_processing_prompt", PostProcessor.DEFAULT_PROMPT) ?: PostProcessor.DEFAULT_PROMPT
     private fun customPrompt() = prefs().getString("custom_post_processing_prompt", PostProcessor.DEFAULT_PROMPT) ?: PostProcessor.DEFAULT_PROMPT
+
+    private fun currentPolishModel(): String =
+        prefs().getString("polish_model", PostProcessor.DEFAULT_POLISH_MODEL) ?: PostProcessor.DEFAULT_POLISH_MODEL
+
+    private fun promptPolishModel() {
+        val options = PostProcessor.POLISH_MODEL_OPTIONS
+        val current = currentPolishModel()
+        val checkedIndex = options.indexOf(current).takeIf { it >= 0 } ?: 0
+        android.app.AlertDialog.Builder(this)
+            .setTitle("Polish model (Groq)")
+            .setSingleChoiceItems(options.toTypedArray(), checkedIndex) { dialog, which ->
+                prefs().edit().putString("polish_model", options[which]).apply()
+                dialog.dismiss()
+                refresh()
+            }
+            .setNegativeButton("Cancel", null)
+            .setNeutralButton("Reset to default") { _, _ ->
+                prefs().edit().remove("polish_model").apply()
+                refresh()
+            }
+            .show()
+    }
 
     private fun customPromptSummary(): String {
         val prompt = customPrompt()

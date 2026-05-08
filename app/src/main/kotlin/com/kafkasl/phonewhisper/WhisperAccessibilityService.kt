@@ -828,8 +828,9 @@ class WhisperAccessibilityService : AccessibilityService() {
             }
 
             val prompt = prefs().getString("post_processing_prompt", PostProcessor.DEFAULT_PROMPT) ?: PostProcessor.DEFAULT_PROMPT
+            val model = prefs().getString("polish_model", PostProcessor.DEFAULT_POLISH_MODEL) ?: PostProcessor.DEFAULT_POLISH_MODEL
 
-            PostProcessor.process(text, prompt, apiKey) { result ->
+            PostProcessor.process(text, prompt, apiKey, model) { result ->
                 handler.post {
                     if (result.text != null && result.text.isNotBlank()) {
                         addNewProperNouns(result.newProperNouns)

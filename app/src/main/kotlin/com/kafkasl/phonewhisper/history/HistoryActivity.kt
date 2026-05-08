@@ -47,6 +47,15 @@ class HistoryActivity : AppCompatActivity() {
     private val selectedIds = mutableSetOf<Long>()
     private var cachedEntries: List<HistoryEntry> = emptyList()
 
+    /**
+     * Per-entry override of which variant the card body shows. Absent when the
+     * card is showing the auto-picked default (computed on the fly from the
+     * heuristic in [defaultVariant]). Tap toggles between the two and inserts
+     * the explicit choice here so it survives re-renders.
+     */
+    private enum class DisplayVariant { POLISHED, RAW }
+    private val displayedVariant = mutableMapOf<Long, DisplayVariant>()
+
     private fun inSelectionMode(): Boolean = selectedIds.isNotEmpty()
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -225,17 +234,26 @@ class HistoryActivity : AppCompatActivity() {
 
     /**
      * Build the merged-clipboard text for the selected entries. Sorted by timestamp
-     * ascending (oldest first) so the merged text reads chronologically. Each entry
-     * uses its polished text if available, else its raw text.
+     * ascending (oldest first) so the merged text reads chronologically. Uses the
+     * variant currently displayed on each card (auto-pick or user override) so the
+     * merge respects per-entry choices.
      */
     private fun buildMergedText(): String {
         val ordered = cachedEntries
             .filter { it.id in selectedIds }
             .sortedBy { it.timestamp }
-        return ordered.mapNotNull { entry ->
-            entry.polishedTranscript?.takeIf { it.isNotBlank() }
-                ?: entry.rawTranscript?.takeIf { it.isNotBlank() }
-        }.joinToString(separator = "\n")
+        return ordered.mapNotNull { entry -> textForCurrentVariant(entry) }
+            .joinToString(separator = "\n")
+    }
+
+    /** Resolves the displayed text for an entry's current variant, falling back across blanks. */
+    private fun textForCurrentVariant(entry: HistoryEntry): String? {
+        val polished = entry.polishedTranscript?.takeIf { it.isNotBlank() }
+        val raw = entry.rawTranscript?.takeIf { it.isNotBlank() }
+        return when (currentVariant(entry)) {
+            DisplayVariant.POLISHED -> polished ?: raw
+            DisplayVariant.RAW -> raw ?: polished
+        }
     }
 
     private fun copySelectedToClipboard() {
@@ -261,11 +279,13 @@ class HistoryActivity : AppCompatActivity() {
 
     private fun renderEntries(entries: List<HistoryEntry>) {
         cachedEntries = entries
-        // Drop selections that no longer correspond to any entry (e.g. after Clear all)
-        if (selectedIds.isNotEmpty()) {
-            val ids = entries.map { it.id }.toSet()
-            if (selectedIds.removeAll { it !in ids }) updateChromeForSelection()
+        // Drop selections + variant overrides that no longer correspond to any entry
+        // (e.g. after Clear all or per-entry deletion).
+        val ids = entries.map { it.id }.toSet()
+        if (selectedIds.isNotEmpty() && selectedIds.removeAll { it !in ids }) {
+            updateChromeForSelection()
         }
+        displayedVariant.keys.removeAll { it !in ids }
         listContainer.removeAllViews()
         if (entries.isEmpty()) {
             emptyLabel.visibility = View.VISIBLE
@@ -277,8 +297,63 @@ class HistoryActivity : AppCompatActivity() {
 
     // --- Per-entry card ---
 
+    /**
+     * Conservative detector for the polish-step-answered-instead-of-polishing
+     * failure mode. Only flags polished text that *starts* with a giveaway
+     * response opener (e.g. "Sure!", "Here's", "I'd be happy") that the raw
+     * didn't have. False positives are recoverable via the tap-to-toggle, so
+     * erring conservative is the right call here.
+     */
+    private fun polishLooksLikeResponse(raw: String, polished: String): Boolean {
+        val openers = listOf(
+            "I'd be happy", "I'd love", "I'm happy",
+            "Sure,", "Sure!", "Of course", "Certainly", "Absolutely",
+            "Here's", "Here is", "Here are",
+            "I don't have", "I do not have", "I cannot", "I can't",
+            "As an AI", "I'm an AI", "I am an AI",
+            "I'll ", "I will ", "Let me ",
+            "Yes,", "No,",
+            "To answer", "The answer "
+        )
+        val p = polished.trimStart()
+        val r = raw.trimStart()
+        return openers.any { o ->
+            p.startsWith(o, ignoreCase = true) && !r.startsWith(o, ignoreCase = true)
+        }
+    }
+
+    /** True when the entry has both raw and polished text and they differ — i.e. the user can tap to swap. */
+    private fun canToggleVariant(entry: HistoryEntry): Boolean {
+        val polished = entry.polishedTranscript?.takeIf { it.isNotBlank() } ?: return false
+        val raw = entry.rawTranscript?.takeIf { it.isNotBlank() } ?: return false
+        return polished != raw
+    }
+
+    /** Auto-picked variant for entries where both polished and raw exist and differ. */
+    private fun defaultVariant(entry: HistoryEntry): DisplayVariant {
+        val polished = entry.polishedTranscript ?: return DisplayVariant.RAW
+        val raw = entry.rawTranscript ?: return DisplayVariant.POLISHED
+        return if (polishLooksLikeResponse(raw, polished)) DisplayVariant.RAW else DisplayVariant.POLISHED
+    }
+
+    /** Resolved variant: the user override if set, otherwise the auto-picked default. */
+    private fun currentVariant(entry: HistoryEntry): DisplayVariant =
+        displayedVariant[entry.id] ?: defaultVariant(entry)
+
+    private fun toggleDisplayedVariant(entry: HistoryEntry) {
+        val next = when (currentVariant(entry)) {
+            DisplayVariant.POLISHED -> DisplayVariant.RAW
+            DisplayVariant.RAW -> DisplayVariant.POLISHED
+        }
+        displayedVariant[entry.id] = next
+        renderEntries(cachedEntries)
+    }
+
     private fun buildEntryCard(entry: HistoryEntry): View {
         val isSelected = entry.id in selectedIds
+        val canToggle = canToggleVariant(entry)
+        val variant = currentVariant(entry)
+
         val card = MaterialCardView(this).apply {
             radius = dp(16).toFloat()
             cardElevation = dp(1).toFloat()
@@ -301,8 +376,11 @@ class HistoryActivity : AppCompatActivity() {
                 toggleSelection(entry); true
             }
             setOnClickListener {
-                if (inSelectionMode()) toggleSelection(entry)
-                else showEntryDetail(entry)
+                when {
+                    inSelectionMode() -> toggleSelection(entry)
+                    canToggle -> toggleDisplayedVariant(entry)
+                    else -> showEntryDetail(entry)
+                }
             }
         }
 
@@ -310,7 +388,7 @@ class HistoryActivity : AppCompatActivity() {
             orientation = LinearLayout.VERTICAL
         }
 
-        // Header row: timestamp + status chip
+        // Header row: timestamp + status / variant chip
         val header = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -322,19 +400,32 @@ class HistoryActivity : AppCompatActivity() {
             setTextColor(attrColor(android.R.attr.textColorSecondary))
             layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
         })
-        header.addView(buildStatusChip(entry.status))
+        // For success entries that have both variants we show a Polished/Unpolished
+        // chip (the active variant). Other statuses (POLISH_FAILED, STT_FAILED,
+        // FLAGGED_BAD) keep their existing chips.
+        val chip = if (canToggle && entry.status == HistoryStatus.SUCCESS) {
+            buildVariantChip(variant)
+        } else {
+            buildStatusChip(entry.status)
+        }
+        header.addView(chip)
         content.addView(header)
 
-        // Transcript body (Material body-large size; raw is dimmed; error is italic).
+        // Transcript body (Material body-large size; error is italic).
         // Truncated to a few lines so a single very long entry doesn't dominate the
-        // list — tapping the card opens a detail dialog with the full text.
+        // list — for toggleable entries, tap swaps variants; otherwise tap opens
+        // the detail dialog.
         val displayText = when {
+            canToggle -> when (variant) {
+                DisplayVariant.POLISHED -> entry.polishedTranscript ?: ""
+                DisplayVariant.RAW -> entry.rawTranscript ?: ""
+            }
             !entry.polishedTranscript.isNullOrBlank() -> entry.polishedTranscript
             !entry.rawTranscript.isNullOrBlank() -> entry.rawTranscript
             else -> "No transcript — ${entry.errorMessage ?: "error"}"
         }
         val isErrorState = entry.polishedTranscript.isNullOrBlank() && entry.rawTranscript.isNullOrBlank()
-        val isRawOnly = entry.polishedTranscript.isNullOrBlank() && !entry.rawTranscript.isNullOrBlank()
+        val isRawOnly = !canToggle && entry.polishedTranscript.isNullOrBlank() && !entry.rawTranscript.isNullOrBlank()
         content.addView(TextView(this).apply {
             text = if (isRawOnly) "Raw · $displayText" else displayText
             textSize = 16f
@@ -384,17 +475,25 @@ class HistoryActivity : AppCompatActivity() {
             HistoryStatus.FLAGGED_BAD -> Triple("Flagged", 0xFF6A1B9A.toInt(), 0x336A1B9A)
             else -> Triple(status, attrColor(android.R.attr.textColorSecondary), 0x14808080)
         }
-        return TextView(this).apply {
-            text = label
-            textSize = 11f
-            letterSpacing = 0.04f
-            setTypeface(typeface, Typeface.NORMAL)
-            setTextColor(fg)
-            setPadding(dp(10), dp(4), dp(10), dp(4))
-            background = GradientDrawable().apply {
-                cornerRadius = dp(12).toFloat()
-                setColor(bg)
-            }
+        return makeChip(label, fg, bg)
+    }
+
+    /** Chip used on toggleable success entries to show which variant the body is currently showing. */
+    private fun buildVariantChip(variant: DisplayVariant): TextView = when (variant) {
+        DisplayVariant.POLISHED -> makeChip("Polished", 0xFF1B5E20.toInt(), 0x331B5E20)
+        DisplayVariant.RAW -> makeChip("Unpolished", 0xFF8B5A00.toInt(), 0x33B76E00)
+    }
+
+    private fun makeChip(label: String, fg: Int, bg: Int): TextView = TextView(this).apply {
+        text = label
+        textSize = 11f
+        letterSpacing = 0.04f
+        setTypeface(typeface, Typeface.NORMAL)
+        setTextColor(fg)
+        setPadding(dp(10), dp(4), dp(10), dp(4))
+        background = GradientDrawable().apply {
+            cornerRadius = dp(12).toFloat()
+            setColor(bg)
         }
     }
 
@@ -427,6 +526,9 @@ class HistoryActivity : AppCompatActivity() {
     private fun showEntryMenu(anchor: View, entry: HistoryEntry) {
         val menu = PopupMenu(this, anchor)
         menu.menu.add("Copy text")
+        if (canToggleVariant(entry)) {
+            menu.menu.add("Show details (raw + polished)")
+        }
         if (entry.status != HistoryStatus.STT_FAILED && !entry.rawTranscript.isNullOrBlank()) {
             menu.menu.add("Re-polish with current settings")
         }
@@ -439,6 +541,7 @@ class HistoryActivity : AppCompatActivity() {
         menu.setOnMenuItemClickListener { item ->
             when (item.title) {
                 "Copy text" -> copyEntryText(entry)
+                "Show details (raw + polished)" -> showEntryDetail(entry)
                 "Re-polish with current settings" -> retryPolishWithCurrent(entry)
                 "Flag as bad" -> setFlag(entry, HistoryStatus.FLAGGED_BAD)
                 "Unflag" -> setFlag(entry, HistoryStatus.SUCCESS)
@@ -519,7 +622,7 @@ class HistoryActivity : AppCompatActivity() {
     }
 
     private fun copyEntryText(entry: HistoryEntry) {
-        val text = entry.polishedTranscript ?: entry.rawTranscript ?: return
+        val text = textForCurrentVariant(entry) ?: return
         val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
         cm.setPrimaryClip(ClipData.newPlainText("phonewhisper", text))
         Toast.makeText(this, "Copied to clipboard", Toast.LENGTH_SHORT).show()
@@ -620,7 +723,8 @@ class HistoryActivity : AppCompatActivity() {
         }
         val apiKey = prefs().getString("api_key", "") ?: ""
         val prompt = prefs().getString("post_processing_prompt", PostProcessor.DEFAULT_PROMPT) ?: PostProcessor.DEFAULT_PROMPT
-        PostProcessor.process(rawText, prompt, apiKey) { polishResult ->
+        val model = prefs().getString("polish_model", PostProcessor.DEFAULT_POLISH_MODEL) ?: PostProcessor.DEFAULT_POLISH_MODEL
+        PostProcessor.process(rawText, prompt, apiKey, model) { polishResult ->
             val polished = polishResult.text?.takeIf { it.isNotBlank() }
             val status = if (polished != null) HistoryStatus.SUCCESS else HistoryStatus.POLISH_FAILED
             if (polished != null) addNewProperNouns(polishResult.newProperNouns)
@@ -657,7 +761,8 @@ class HistoryActivity : AppCompatActivity() {
         Toast.makeText(this, if (useCurrentSettings) "Re-polishing…" else "Retrying polish…", Toast.LENGTH_SHORT).show()
 
         val prompt = prefs().getString("post_processing_prompt", PostProcessor.DEFAULT_PROMPT) ?: PostProcessor.DEFAULT_PROMPT
-        PostProcessor.process(rawText, prompt, apiKey) { result ->
+        val model = prefs().getString("polish_model", PostProcessor.DEFAULT_POLISH_MODEL) ?: PostProcessor.DEFAULT_POLISH_MODEL
+        PostProcessor.process(rawText, prompt, apiKey, model) { result ->
             val polished = result.text?.takeIf { it.isNotBlank() }
             val status = if (polished != null) HistoryStatus.SUCCESS else HistoryStatus.POLISH_FAILED
             if (polished != null) addNewProperNouns(result.newProperNouns)
