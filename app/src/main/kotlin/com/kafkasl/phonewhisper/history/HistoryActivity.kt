@@ -302,7 +302,7 @@ class HistoryActivity : AppCompatActivity() {
             }
             setOnClickListener {
                 if (inSelectionMode()) toggleSelection(entry)
-                else copyEntryText(entry)
+                else showEntryDetail(entry)
             }
         }
 
@@ -325,7 +325,9 @@ class HistoryActivity : AppCompatActivity() {
         header.addView(buildStatusChip(entry.status))
         content.addView(header)
 
-        // Transcript body (Material body-large size; raw is dimmed; error is italic)
+        // Transcript body (Material body-large size; raw is dimmed; error is italic).
+        // Truncated to a few lines so a single very long entry doesn't dominate the
+        // list — tapping the card opens a detail dialog with the full text.
         val displayText = when {
             !entry.polishedTranscript.isNullOrBlank() -> entry.polishedTranscript
             !entry.rawTranscript.isNullOrBlank() -> entry.rawTranscript
@@ -334,19 +336,17 @@ class HistoryActivity : AppCompatActivity() {
         val isErrorState = entry.polishedTranscript.isNullOrBlank() && entry.rawTranscript.isNullOrBlank()
         val isRawOnly = entry.polishedTranscript.isNullOrBlank() && !entry.rawTranscript.isNullOrBlank()
         content.addView(TextView(this).apply {
-            text = displayText
+            text = if (isRawOnly) "Raw · $displayText" else displayText
             textSize = 16f
             setLineSpacing(0f, 1.25f)
             setPadding(0, dp(10), 0, dp(10))
+            maxLines = 4
+            ellipsize = android.text.TextUtils.TruncateAt.END
             setTextColor(
                 if (isErrorState) attrColor(android.R.attr.textColorSecondary)
                 else attrColor(android.R.attr.textColorPrimary)
             )
             if (isErrorState) setTypeface(typeface, Typeface.ITALIC)
-            if (isRawOnly) {
-                // Mark raw-only with a subtle prefix so users know polish wasn't applied
-                text = "Raw · $displayText"
-            }
         })
 
         // Action row
@@ -447,6 +447,75 @@ class HistoryActivity : AppCompatActivity() {
             true
         }
         menu.show()
+    }
+
+    /**
+     * Detail dialog for a single entry — shown when the user taps a card outside
+     * of selection mode. Displays the full polished + raw text in a scrollable
+     * view (cards on the list are truncated to 4 lines), with quick Copy / Close
+     * actions. Other actions (re-polish, flag, delete) stay in the More menu on
+     * the card itself.
+     */
+    private fun showEntryDetail(entry: HistoryEntry) {
+        val container = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(20), dp(8), dp(20), dp(8))
+        }
+        container.addView(TextView(this).apply {
+            text = timeFormat.format(Date(entry.timestamp))
+            textSize = 12f
+            setTextColor(attrColor(android.R.attr.textColorSecondary))
+        })
+        val polished = entry.polishedTranscript?.takeIf { it.isNotBlank() }
+        val raw = entry.rawTranscript?.takeIf { it.isNotBlank() }
+        if (polished != null) {
+            container.addView(sectionLabel("Polished"))
+            container.addView(detailBody(polished))
+        }
+        if (raw != null && raw != polished) {
+            container.addView(sectionLabel(if (polished == null) "Raw" else "Raw (before polish)"))
+            container.addView(detailBody(raw))
+        }
+        if (polished == null && raw == null) {
+            container.addView(detailBody("No transcript — ${entry.errorMessage ?: "error"}"))
+        } else if (entry.errorMessage != null) {
+            container.addView(sectionLabel("Note"))
+            container.addView(detailBody(entry.errorMessage))
+        }
+
+        val scroll = ScrollView(this).apply { addView(container) }
+
+        android.app.AlertDialog.Builder(this)
+            .setTitle(buildStatusTitle(entry.status))
+            .setView(scroll)
+            .setPositiveButton("Copy") { _, _ -> copyEntryText(entry) }
+            .setNegativeButton("Close", null)
+            .show()
+    }
+
+    private fun sectionLabel(text: String): TextView = TextView(this).apply {
+        this.text = text
+        textSize = 11f
+        letterSpacing = 0.06f
+        setTypeface(typeface, Typeface.BOLD)
+        setTextColor(attrColor(android.R.attr.textColorSecondary))
+        setPadding(0, dp(12), 0, dp(4))
+    }
+
+    private fun detailBody(text: String): TextView = TextView(this).apply {
+        this.text = text
+        textSize = 16f
+        setLineSpacing(0f, 1.25f)
+        setTextColor(attrColor(android.R.attr.textColorPrimary))
+        setTextIsSelectable(true)
+    }
+
+    private fun buildStatusTitle(status: String): String = when (status) {
+        HistoryStatus.SUCCESS -> "Transcription"
+        HistoryStatus.POLISH_FAILED -> "Transcription · polish failed"
+        HistoryStatus.STT_FAILED -> "Transcription failed"
+        HistoryStatus.FLAGGED_BAD -> "Transcription · flagged"
+        else -> "Transcription"
     }
 
     private fun copyEntryText(entry: HistoryEntry) {

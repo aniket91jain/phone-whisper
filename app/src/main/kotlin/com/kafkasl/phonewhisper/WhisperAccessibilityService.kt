@@ -29,8 +29,8 @@ import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import android.widget.FrameLayout
 import android.widget.ImageView
-import android.widget.ProgressBar
 import android.widget.TextView
+import com.google.android.material.progressindicator.CircularProgressIndicator
 import android.widget.Toast
 import com.kafkasl.phonewhisper.history.HistoryEntry
 import com.kafkasl.phonewhisper.history.HistoryRepository
@@ -45,26 +45,27 @@ class WhisperAccessibilityService : AccessibilityService() {
         var instance: WhisperAccessibilityService? = null
         private const val TAG = "PhoneWhisper"
         private const val SAMPLE_RATE = 16000
-        private const val BTN_DP = 44
-        private const val PAD_DP = 10
-        private const val MARGIN_DP = 8
+        private const val BTN_DP = 52
+        private const val PAD_DP = 6  // smaller padding → mic icon fills more of the button
+        private const val MARGIN_DP = 14  // visible gap between bubble and screen edge; requires FLAG_LAYOUT_NO_LIMITS on the window or Android clips it
         private const val TAP_THRESHOLD_DP = 10
         // Tighter than TAP_THRESHOLD_DP because we want any deliberate movement to
         // disqualify a long-press, even if it's not yet enough to count as a drag.
         private const val LONG_PRESS_CANCEL_DP = 4
-        private const val RING_DP = 56
+        private const val RING_DP = 64
         // Window is wider than the ring so the button has room to grow on press
         // (visually up to PRESSED_SCALE × button size) without being clipped.
         private const val WINDOW_DP = 108
         private const val PRESSED_SCALE = 1.85f
         private const val FEEDBACK_OFFSET_DP = 64
 
-        private const val COLOR_IDLE = 0xDD1C1C1E.toInt()
+        private const val COLOR_IDLE = 0xD9F2EBF6.toInt()  // Wispr Flow–style very pale lavender, ~85% opacity
         private const val COLOR_RECORDING = 0xDDEF4444.toInt()
         private const val COLOR_PAUSED = 0xDD16A34A.toInt()  // darker green
         private const val COLOR_BUSY = 0xDD6B6B6B.toInt()
         private const val COLOR_FEEDBACK_BG = 0xEE1C1C1E.toInt()
-        private const val COLOR_RING = 0xFFE8EAED.toInt()
+        private const val COLOR_RING = 0xFF1E88E5.toInt()  // saturated blue, visible against light and dark backgrounds
+        private const val RING_TRACK_DP = 5  // stroke thickness for the transcribing spinner
 
         private const val LONG_PRESS_MS = 225L
     }
@@ -74,7 +75,7 @@ class WhisperAccessibilityService : AccessibilityService() {
     private var state = State.IDLE
     private var overlayView: FrameLayout? = null
     private var button: ImageView? = null
-    private var spinner: ProgressBar? = null
+    private var spinner: CircularProgressIndicator? = null
     private var feedbackView: TextView? = null
     private var retryPillView: TextView? = null
     private var retryPillParams: WindowManager.LayoutParams? = null
@@ -177,17 +178,39 @@ class WhisperAccessibilityService : AccessibilityService() {
         val rightSnapX = screenW - margin - (windowSize + buttonSize) / 2
         val leftSnapX = margin + (buttonSize - windowSize) / 2
 
-        val ring = ProgressBar(this).apply {
+        // CircularProgressIndicator requires a Theme.AppCompat-derived theme; the bare
+        // service context doesn't have one (services don't carry an activity theme),
+        // so we wrap it.
+        val themedContext = androidx.appcompat.view.ContextThemeWrapper(
+            this,
+            com.google.android.material.R.style.Theme_Material3_DayNight
+        )
+        val ring = CircularProgressIndicator(themedContext).apply {
             isIndeterminate = true
-            indeterminateTintList = ColorStateList.valueOf(COLOR_RING)
+            setIndicatorColor(COLOR_RING)
+            trackThickness = (RING_TRACK_DP * dp).toInt()
+            indicatorSize = ringSize
             visibility = View.GONE
         }
 
         val img = ImageView(this).apply {
+            // Drawable's fillColor is dark grey (#1C1C1E) so the mic stays dark and
+            // readable across every state — light-grey idle, red recording, green
+            // paused, busy grey transcribing.
             setImageResource(R.drawable.ic_mic)
             scaleType = ImageView.ScaleType.CENTER_INSIDE
             setPadding(pad, pad, pad, pad)
             background = circle(COLOR_IDLE)
+            // Drop shadow underneath the bubble (Wispr Flow–style elevation).
+            elevation = 6f * dp
+            // Provide an explicit circular outline so the system shadow is round
+            // rather than a rectangle bounding the view.
+            outlineProvider = object : android.view.ViewOutlineProvider() {
+                override fun getOutline(view: View, outline: android.graphics.Outline) {
+                    outline.setOval(0, 0, view.width, view.height)
+                }
+            }
+            clipToOutline = false
         }
 
         val overlay = FrameLayout(this).apply {
@@ -201,7 +224,11 @@ class WhisperAccessibilityService : AccessibilityService() {
         val params = WindowManager.LayoutParams(
             windowSize, windowSize,
             WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
+            // FLAG_LAYOUT_NO_LIMITS lets the window position past Android's default
+            // safe-area clamping (gesture-nav inset on Pixel etc.) so MARGIN_DP
+            // actually controls the visible position rather than being overridden.
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
             PixelFormat.TRANSLUCENT
         ).apply {
             gravity = Gravity.TOP or Gravity.START
@@ -223,6 +250,18 @@ class WhisperAccessibilityService : AccessibilityService() {
         overlay.setOnTouchListener { v, ev ->
             when (ev.action) {
                 MotionEvent.ACTION_DOWN -> {
+                    // Constrain the hit area to the visible button circle. The touch
+                    // window is windowSize × windowSize but the user only sees a
+                    // BTN_DP-diameter circle at the centre — taps outside that circle
+                    // (e.g. in the transparent buffer used for grow-on-press) shouldn't
+                    // count as taps on the bubble.
+                    val centerLocal = windowSize / 2f
+                    val dx = ev.x - centerLocal
+                    val dy = ev.y - centerLocal
+                    val radius = (BTN_DP * dp) / 2f
+                    if (dx * dx + dy * dy > radius * radius) {
+                        return@setOnTouchListener false
+                    }
                     startX = params.x; startY = params.y
                     touchX = ev.rawX; touchY = ev.rawY
                     longPressFired = false
@@ -649,7 +688,7 @@ class WhisperAccessibilityService : AccessibilityService() {
         val pcm = pcmStream?.toByteArray() ?: ByteArray(0)
         pcmStream = null
 
-        if (pcm.isEmpty()) { reset("No audio captured"); return }
+        if (pcm.isEmpty()) { reset("Nothing transcribable detected"); return }
 
         val useLocal = prefs().getBoolean("use_local", true)
         val local = localTranscriber
@@ -713,9 +752,11 @@ class WhisperAccessibilityService : AccessibilityService() {
             if (result.text != null && result.text.isNotBlank()) {
                 handleTranscriptionResult(result.text, timestamp, audioPath)
             } else {
-                saveSttFailureEntry(timestamp, audioPath, result.error ?: "empty transcript")
+                val err = result.error ?: "empty transcript"
+                val isSilentResult = err == "empty transcript" || err == "all chunks empty"
+                saveSttFailureEntry(timestamp, audioPath, err)
                 handler.post {
-                    toast("Error: ${result.error ?: "empty transcript"}")
+                    toast(if (isSilentResult) "Nothing transcribable detected" else "Error: $err")
                     state = State.IDLE
                     setBusy(false)
                     setAppearance(COLOR_IDLE)
@@ -725,16 +766,27 @@ class WhisperAccessibilityService : AccessibilityService() {
     }
 
     private fun handleTranscriptionResult(text: String?, timestamp: Long, audioPath: String?) {
-        if (text.isNullOrBlank()) {
-            saveSttFailureEntry(timestamp, audioPath, "empty transcript")
+        // Whisper STT often emits canned phrases ("Thank you for watching", etc.)
+        // when fed silence. Filter those out before they reach polish + paste.
+        val filtered = when {
+            text.isNullOrBlank() -> null
+            TranscriptHallucinations.isHallucinatedSilence(text) -> null
+            else -> TranscriptHallucinations.stripTrailingThankYou(text).ifBlank { null }
+        }
+
+        if (filtered == null) {
+            saveSttFailureEntry(timestamp, audioPath, "nothing transcribable")
             handler.post {
-                toast("No speech detected")
+                toast("Nothing transcribable detected")
                 state = State.IDLE
                 setBusy(false)
                 setAppearance(COLOR_IDLE)
             }
             return
         }
+
+        @Suppress("NAME_SHADOWING")
+        val text = filtered
 
         val usePostProcessing = prefs().getBoolean("use_post_processing", false)
         val apiKey = prefs().getString("api_key", "") ?: ""
