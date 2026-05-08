@@ -7,7 +7,12 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.res.ColorStateList
+import android.graphics.BlurMaskFilter
+import android.graphics.Canvas
+import android.graphics.ColorFilter
+import android.graphics.Paint
 import android.graphics.PixelFormat
+import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
 import android.media.AudioFormat
 import android.media.AudioRecord
@@ -201,22 +206,43 @@ class WhisperAccessibilityService : AccessibilityService() {
             scaleType = ImageView.ScaleType.CENTER_INSIDE
             setPadding(pad, pad, pad, pad)
             background = circle(COLOR_IDLE)
-            // Drop shadow underneath the bubble (Wispr Flow–style elevation).
-            elevation = 6f * dp
-            // Provide an explicit circular outline so the system shadow is round
-            // rather than a rectangle bounding the view.
-            outlineProvider = object : android.view.ViewOutlineProvider() {
-                override fun getOutline(view: View, outline: android.graphics.Outline) {
-                    outline.setOval(0, 0, view.width, view.height)
+        }
+
+        // Custom drop shadow drawn as a separate view behind the button. We can't
+        // use View.elevation here: Android's shadow renderer tessellates the oval
+        // outline into a ~10-sided polygon, which is faintly visible as a decagon
+        // halo. BlurMaskFilter on a software-rendered view gives a true Gaussian
+        // shadow with no polygon edges.
+        val shadowBlur = 10f * dp
+        val shadowRadius = buttonSize / 2f
+        val shadowOffsetY = (2 * dp).toInt()
+        val shadowSide = ((shadowRadius + shadowBlur * 2f) * 2f).toInt()
+        val shadow = View(this).apply {
+            // BlurMaskFilter is not supported on hardware-accelerated layers.
+            setLayerType(View.LAYER_TYPE_SOFTWARE, null)
+            background = object : Drawable() {
+                private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                    color = 0x66000000.toInt()
+                    maskFilter = BlurMaskFilter(shadowBlur, BlurMaskFilter.Blur.NORMAL)
                 }
+                override fun draw(canvas: Canvas) {
+                    canvas.drawCircle(bounds.exactCenterX(), bounds.exactCenterY(), shadowRadius, paint)
+                }
+                override fun setAlpha(alpha: Int) { paint.alpha = alpha }
+                override fun setColorFilter(filter: ColorFilter?) { paint.colorFilter = filter }
+                @Suppress("DEPRECATION")
+                override fun getOpacity() = PixelFormat.TRANSLUCENT
             }
-            clipToOutline = false
         }
 
         val overlay = FrameLayout(this).apply {
             // Allow the button to scale beyond its layout bounds when pressed.
             clipChildren = false
             clipToPadding = false
+            // Shadow first so it sits behind the ring and button.
+            addView(shadow, FrameLayout.LayoutParams(shadowSide, shadowSide, Gravity.CENTER).apply {
+                topMargin = shadowOffsetY
+            })
             addView(ring, FrameLayout.LayoutParams(ringSize, ringSize, Gravity.CENTER))
             addView(img, FrameLayout.LayoutParams(buttonSize, buttonSize, Gravity.CENTER))
         }
