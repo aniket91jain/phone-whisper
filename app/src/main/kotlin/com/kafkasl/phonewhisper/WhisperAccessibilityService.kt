@@ -811,8 +811,11 @@ class WhisperAccessibilityService : AccessibilityService() {
             return
         }
 
+        // Convert spoken punctuation commands ("comma", "open paren", ...) to
+        // their symbols so the LLM polish (or raw paste, when polish is off)
+        // sees real punctuation rather than the spoken words.
         @Suppress("NAME_SHADOWING")
-        val text = filtered
+        val text = SpokenPunctuation.normalize(filtered)
 
         val usePostProcessing = prefs().getBoolean("use_post_processing", false)
         val apiKey = prefs().getString("api_key", "") ?: ""
