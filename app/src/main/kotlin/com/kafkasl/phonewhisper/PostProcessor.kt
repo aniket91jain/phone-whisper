@@ -111,7 +111,7 @@ SPELLING: spoken attempt + individual letters (A-N-I-K-E-T) -> delete both, inse
 PROPER NOUNS (correct STT errors for these names only, no others):
   Locations: Jasmine Journeys, Amado, Assagao, Colva, Goa, Majorda, Delhi
   People: Adhiraj, Kanika, Rakhi, Jyoti, Joppan chetta, Jeetender, Vikash, Preksha Shah, Vinu Daniel, Vinu, Wallmakers, Pratham, Survesh, Gandesh, Oshin ma'am, Man Singh
-  Products: Plaud (plod/plowed/cloud), Soniox (sonic/sony ox/sonics), OwnerRez (onerous/owner res/own arrays/ownerraz), PriceLabs (price labs/letters/laps), Obsidian
+  Products: Plaud (plod/plowed/cloud), Soniox (sonic/sony ox/sonics), OwnerRez (onerous/owner res/own arrays/ownerraz), PriceLabs (price labs/letters/laps), Obsidian, Tavily, Jina
   Abbreviation: jj or JJ when referring to Jasmine Journeys -> always render as JJ
 
 FORBIDDEN: no other word changes, no rephrasing, no adding content, no reordering, no removing or replacing any word, symbol, or punctuation that exists in the input. If you are unsure whether a change is allowed, do not make it — leave the text as-is.
